@@ -10,4 +10,12 @@
         <maven.compiler.release>25</maven.compiler.release>
         <exec.mainClass>com.mycompany.redxela.REDXela</exec.mainClass>
     </properties>
+    <dependencies>
+        <!-- Look and Feel -->
+        <dependency>
+            <groupId>com.formdev</groupId>
+            <artifactId>flatlaf</artifactId>
+            <version>3.7</version>
+        </dependency>
+    </dependencies>
 </project>
