@@ -11,41 +11,60 @@ import java.util.UUID;
 
 /**
  * Catálogo maestro predefinido de tipos de mercancía para REDXela.
- * 
+ *
  * Implementa los requerimientos de la especificación técnica:
- * 1. Define un mínimo de 5 tipos de mercancía con combinaciones distintas de recursos.
+ *
+ *
+ * 1. Define un mínimo de 5 tipos de mercancía con combinaciones distintas de
+ * recursos.
+ *
+ *
  * 2. Incorpora deliberadamente un escenario de contención cruzada entre
- *    ELECTRONICO y CARGA_ESPECIAL, los cuales solicitan los recursos ESCANEAR_CODIGOS y
- *    MONTACARGAS en orden inverso:
- *      - ELECTRONICO: solicita ESCANEAR_CODIGOS -> MONTACARGAS -> CONTROL_CALIDAD
- *      - CARGA_ESPECIAL: solicita MONTACARGAS -> ESCANEAR_CODIGOS -> AREA_CARGA
- *    Esto genera una Espera Circular (Circular Wait), una de las 4 condiciones de Coffman
- *    necesarias para provocar un Interbloqueo (Deadlock) de forma reproducible.
+ * ELECTRONICO y CARGA_ESPECIAL, los cuales solicitan los recursos
+ * ESCANEAR_CODIGOS y MONTACARGAS en orden inverso:
+ *
+ *  - ELECTRONICO: solicita ESCANEAR_CODIGOS -> MONTACARGAS -> CONTROL_CALIDAD
+ *
+ *  - CARGA_ESPECIAL: solicita MONTACARGAS -> ESCANEAR_CODIGOS -> AREA_CARGA Esto
+ * 
+ * genera una Espera Circular (Circular Wait), una de las 4 condiciones de
+ * Coffman necesarias para provocar un Interbloqueo (Deadlock) de forma
+ * reproducible.
  */
 public class MerchandiseCatalog {
 
-    /** Mercancía 1: Artículos comunes de consumo sin requerimientos especiales. */
+    /**
+     * Mercancía 1: Artículos comunes de consumo sin requerimientos especiales.
+     */
     public static final Merchandise ESTANDAR;
 
-    /** Mercancía 2: Artículos de alto tonelaje que demandan montacargas y personal de apoyo. */
+    /**
+     * Mercancía 2: Artículos de alto tonelaje que demandan montacargas y
+     * personal de apoyo.
+     */
     public static final Merchandise PESADO;
 
-    /** Mercancía 3: Artículos frágiles que requieren inspección rigurosa de control de calidad. */
+    /**
+     * Mercancía 3: Artículos frágiles que requieren inspección rigurosa de
+     * control de calidad.
+     */
     public static final Merchandise FRAGIL;
 
-    /** 
-     * Mercancía 4: Dispositivos de alto valor.
-     * Escenario Deadlock A: Solicita primero el escáner de códigos y luego el montacargas.
+    /**
+     * Mercancía 4: Dispositivos de alto valor. Escenario Deadlock A: Solicita
+     * primero el escáner de códigos y luego el montacargas.
      */
     public static final Merchandise ELECTRONICO;
 
-    /** 
-     * Mercancía 5: Mercancía especial o regulada.
-     * Escenario Deadlock B: Solicita primero el montacargas y luego el escáner de códigos.
+    /**
+     * Mercancía 5: Mercancía especial o regulada. Escenario Deadlock B:
+     * Solicita primero el montacargas y luego el escáner de códigos.
      */
     public static final Merchandise CARGA_ESPECIAL;
 
-    /** Lista inmutable con todos los tipos disponibles. */
+    /**
+     * Lista inmutable con todos los tipos disponibles.
+     */
     private static final List<Merchandise> ALL_MERCHANDISE = new ArrayList<>();
 
     static {
@@ -135,7 +154,7 @@ public class MerchandiseCatalog {
 
     /**
      * Obtiene una lista inmutable con los 5 tipos de mercancía registrados.
-     * 
+     *
      * @return Lista inmutable de mercancías.
      */
     public static List<Merchandise> getAll() {
