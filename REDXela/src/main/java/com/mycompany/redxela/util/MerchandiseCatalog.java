@@ -15,18 +15,18 @@ import java.util.UUID;
  * Implementa los requerimientos de la especificación técnica:
  *
  *
- * 1. Define un mínimo de 5 tipos de mercancía con combinaciones distintas de
+ * - Define un mínimo de 5 tipos de mercancía con combinaciones distintas de
  * recursos.
  *
  *
- * 2. Incorpora deliberadamente un escenario de contención cruzada entre
+ * - Incorpora deliberadamente un escenario de contención cruzada entre
  * ELECTRONICO y CARGA_ESPECIAL, los cuales solicitan los recursos
  * ESCANEAR_CODIGOS y MONTACARGAS en orden inverso:
  *
- *  - ELECTRONICO: solicita ESCANEAR_CODIGOS -> MONTACARGAS -> CONTROL_CALIDAD
+ * - ELECTRONICO: solicita ESCANEAR_CODIGOS -> MONTACARGAS -> CONTROL_CALIDAD
  *
- *  - CARGA_ESPECIAL: solicita MONTACARGAS -> ESCANEAR_CODIGOS -> AREA_CARGA Esto
- * 
+ * - CARGA_ESPECIAL: solicita MONTACARGAS -> ESCANEAR_CODIGOS -> AREA_CARGA Esto
+ *
  * genera una Espera Circular (Circular Wait), una de las 4 condiciones de
  * Coffman necesarias para provocar un Interbloqueo (Deadlock) de forma
  * reproducible.
@@ -117,34 +117,34 @@ public class MerchandiseCatalog {
 
         /*
          * 4. ELECTRÓNICO DE ALTO VALOR:
-         * Orden de adquisición: ESCANEAR_CODIGOS -> MONTACARGAS -> CONTROL_CALIDAD.
-         * Involucrado en Deadlock deliberado con CARGA_ESPECIAL.
+         * Orden de adquisición: ESCANEAR_CODIGOS (1) -> MONTACARGAS (2) -> CONTROL_CALIDAD (1).
+         * Involucrado en Deadlock deliberado con CARGA_ESPECIAL (2 + 2 = 4 > 3 montacargas totales).
          */
         Map<ResourceType, Integer> electronicResources = new LinkedHashMap<>();
         electronicResources.put(ResourceType.ESCANEAR_CODIGOS, 1);
-        electronicResources.put(ResourceType.MONTACARGAS, 1);
+        electronicResources.put(ResourceType.MONTACARGAS, 2);
         electronicResources.put(ResourceType.CONTROL_CALIDAD, 1);
         ELECTRONICO = new Merchandise(
                 UUID.randomUUID(),
                 "Electrónico de Alto Valor",
-                "Dispositivos que requieren escaneo estricto de número de serie y montacargas",
+                "Dispositivos que requieren escaneo estricto de número de serie y 2 montacargas",
                 electronicResources,
                 List.of(ResourceType.ESCANEAR_CODIGOS, ResourceType.MONTACARGAS, ResourceType.CONTROL_CALIDAD)
         );
 
         /*
          * 5. CARGA ESPECIAL:
-         * Orden de adquisición inverso: MONTACARGAS -> ESCANEAR_CODIGOS -> AREA_CARGA.
+         * Orden de adquisición inverso: MONTACARGAS (2) -> ESCANEAR_CODIGOS (1) -> AREA_CARGA (1).
          * Involucrado en Deadlock deliberado con ELECTRONICO.
          */
         Map<ResourceType, Integer> specialResources = new LinkedHashMap<>();
-        specialResources.put(ResourceType.MONTACARGAS, 1);
+        specialResources.put(ResourceType.MONTACARGAS, 2);
         specialResources.put(ResourceType.ESCANEAR_CODIGOS, 1);
         specialResources.put(ResourceType.AREA_CARGA, 1);
         CARGA_ESPECIAL = new Merchandise(
                 UUID.randomUUID(),
                 "Carga Especial",
-                "Material regulado que requiere montacargas y luego escaneo de seguridad",
+                "Material regulado que requiere 2 montacargas y luego escaneo de seguridad",
                 specialResources,
                 List.of(ResourceType.MONTACARGAS, ResourceType.ESCANEAR_CODIGOS, ResourceType.AREA_CARGA)
         );

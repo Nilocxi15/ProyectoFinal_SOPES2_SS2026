@@ -13,13 +13,15 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Semaphore;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
  * Administrador Central de Recursos Compartidos del Centro de Distribución.
  *
- * 1. SINCRONIZACIÓN Y EXCLUSIÓN MUTUA MEDIANTE SEMÁFOROS (Dijkstra):
+ *
+ * 1. SINCRONIZACIÓN Y EXCLUSIÓN MUTUA MEDIANTE SEMÁFOROS:
  *
  * - Cada uno de los 6 tipos de recursos finitos está protegido por una
  * instancia de {@link Semaphore}.
@@ -42,9 +44,9 @@ import java.util.logging.Logger;
  * - Detecta en tiempo real ciclos de Espera Circular (Condición de Coffman).
  *
  * - Implementa la técnica de Desapropiación con Retroceso (Preemption with
- * Rollback): libera los recursos del proceso seleccionado como perdedor,
- * regresándolo a la lista de espera, permitiendo que el proceso ganador
- * continúe sin bloqueos.
+ * Rollback): interrumpe el hilo del proceso seleccionado como perdedor, libera
+ * sus recursos, y lo reencola en la lista de espera del planificador,
+ * permitiendo que el proceso ganador continúe sin bloqueos.
  */
 public class ResourceManager {
 
@@ -80,9 +82,26 @@ public class ResourceManager {
     private final Map<UUID, ResourceType> waitingFor;
 
     /**
+     * Registro de Hilos por Proceso: ID de Orden -> Hilo trabajador que ejecuta
+     * la orden (para Preemption).
+     */
+    private final Map<UUID, Thread> activeOrderThreads;
+
+    /**
      * Lista de oyentes para notificación inmediata de interbloqueos detectados.
      */
     private final List<DeadlockListener> deadlockListeners;
+
+    /**
+     * Callback hacia el planificador para reencolar órdenes expulsadas tras un
+     * Rollback de Deadlock.
+     */
+    private Consumer<Order> rollbackHandler;
+
+    /**
+     * Último evento de Deadlock activo pendiente de resolución manual.
+     */
+    private volatile DeadlockEvent activeDeadlock;
 
     /**
      * Inicializa los semáforos del centro de distribución con sus capacidades
@@ -94,6 +113,7 @@ public class ResourceManager {
         this.resourceWaiters = new EnumMap<>(ResourceType.class);
         this.allocations = new HashMap<>();
         this.waitingFor = new HashMap<>();
+        this.activeOrderThreads = new HashMap<>();
         this.deadlockListeners = Collections.synchronizedList(new ArrayList<>());
 
         // Inicialización de semáforos con política FIFO (fairness = true)
@@ -105,6 +125,16 @@ public class ResourceManager {
     }
 
     /**
+     * Configura el manejador de Rollback que devuelve una orden expulsada a la
+     * cola de espera del planificador.
+     *
+     * @param rollbackHandler Acción de reencolado en el planificador.
+     */
+    public void setRollbackHandler(Consumer<Order> rollbackHandler) {
+        this.rollbackHandler = rollbackHandler;
+    }
+
+    /**
      * Solicita la asignación de un recurso para una orden. Operación bloqueante
      * regulada por el semáforo correspondiente.
      *
@@ -112,7 +142,7 @@ public class ResourceManager {
      * @param resource Tipo de recurso físico.
      * @param count Cantidad de permisos requeridos.
      * @return true si el recurso fue adquirido con éxito; false si el hilo fue
-     * interrumpido o cancelado.
+     * interrumpido o expulsado por Rollback.
      */
     public boolean acquireResource(Order order, ResourceType resource, int count) {
         if (order == null || resource == null || count <= 0) {
@@ -124,17 +154,22 @@ public class ResourceManager {
             return false;
         }
 
-        // Registro de intención en el Grafo de Asignación
+        // Registro de intención en el Grafo de Asignación (RAG)
         synchronized (this) {
+            activeOrderThreads.put(order.getId(), Thread.currentThread());
             waitingFor.put(order.getId(), resource);
             resourceWaiters.get(resource).add(order);
             order.setState(OrderState.ESPERANDO_RECURSOS);
 
-            // Verificación proactiva de ciclo de Deadlock
-            DeadlockEvent deadlock = checkDeadlockCycle();
-            if (deadlock != null) {
-                order.setState(OrderState.BLOQUEADO);
-                notifyDeadlock(deadlock);
+            // Si no hay permisos suficientes disponibles inmediatamente, verificar si se cerró un ciclo de Deadlock
+            if (sem.availablePermits() < count) {
+                DeadlockEvent deadlock = checkDeadlockCycle();
+                if (deadlock != null) {
+                    this.activeDeadlock = deadlock;
+                    deadlock.getOrderA().setState(OrderState.BLOQUEADO);
+                    deadlock.getOrderB().setState(OrderState.BLOQUEADO);
+                    notifyDeadlock(deadlock);
+                }
             }
         }
 
@@ -161,13 +196,13 @@ public class ResourceManager {
             return true;
 
         } catch (InterruptedException ex) {
-            // Manejo de expulsión / preemption
+            // Manejo de expulsión / preemption por resolución de Deadlock
             synchronized (this) {
                 waitingFor.remove(order.getId());
                 resourceWaiters.get(resource).remove(order);
             }
             Thread.currentThread().interrupt();
-            LOGGER.log(Level.WARNING, "[RECURSOS] Adquisición interrumpida para pedido #{0}",
+            LOGGER.log(Level.WARNING, "[RECURSOS] Adquisición interrumpida (Preemption) para pedido #{0}",
                     order.getId().toString().substring(0, 8));
             return false;
         }
@@ -227,6 +262,7 @@ public class ResourceManager {
 
         Map<ResourceType, Integer> orderAlloc = allocations.remove(order.getId());
         waitingFor.remove(order.getId());
+        activeOrderThreads.remove(order.getId());
 
         for (Set<Order> waiters : resourceWaiters.values()) {
             waiters.remove(order);
@@ -251,7 +287,6 @@ public class ResourceManager {
     /**
      * Algoritmo de Detección de Deadlock basado en ciclos del Grafo de
      * Asignación de Recursos (RAG).
-     *
      *
      * Busca la condición de Espera Circular entre pares de procesos:
      *
@@ -301,35 +336,62 @@ public class ResourceManager {
      * Resuelve manualmente un interbloqueo aplicando Desapropiación con
      * Retroceso (Preemption & Rollback):
      *
-     * 1. El pedido perdedor (loser) es despojado de todos los recursos que
-     * tenía asignados.
+     * 1. El hilo del pedido perdedor (loser) es interrumpido para sacarlo del
+     * bloqueo del semáforo.
      *
-     * 2. Sus recursos se liberan de vuelta al semáforo.
+     * 2. El pedido perdedor es despojado de todos los recursos que tenía
+     * asignados y se liberan al semáforo.
      *
-     * 3. El pedido perdedor cambia a estado PENDIENTE y regresa a la cola de
-     * espera para ser procesado después.
+     * 3. El pedido ganador (winner) despierta inmediatamente al liberarse el
+     * recurso disputado y continúa.
      *
-     * 4. El pedido ganador (winner) se desbloquea al quedar disponible el
-     * recurso disputado.
+     * 4. El pedido perdedor cambia a estado PENDIENTE y regresa a la cola de
+     * espera del planificador.
      *
      * @param winner Pedido que tiene autorización para continuar.
      * @param loser Pedido que será expulsado temporalmente y revertido a la
      * cola.
      */
-    public synchronized void resolveDeadlock(Order winner, Order loser) {
+    public void resolveDeadlock(Order winner, Order loser) {
         if (winner == null || loser == null) {
             return;
         }
 
-        LOGGER.log(Level.WARNING, "[DEADLOCK RESUELTO] Ganador: Pedido #{0} | Expulsado con Rollback: Pedido #{1}",
-                new Object[]{winner.getId().toString().substring(0, 8), loser.getId().toString().substring(0, 8)});
+        Thread loserThread;
+        synchronized (this) {
+            LOGGER.log(Level.WARNING, "[DEADLOCK RESUELTO] Ganador: Pedido #{0} | Expulsado con Rollback: Pedido #{1}",
+                    new Object[]{winner.getId().toString().substring(0, 8), loser.getId().toString().substring(0, 8)});
 
-        // Rollback del pedido expulsado
-        releaseAllResources(loser);
-        loser.setState(OrderState.PENDIENTE);
+            this.activeDeadlock = null;
+            loserThread = activeOrderThreads.get(loser.getId());
 
-        // Actualizar estado del ganador para continuar
-        winner.setState(OrderState.ESPERANDO_RECURSOS);
+            // Liberar todos los recursos que retenía el perdedor (desbloquea al ganador)
+            releaseAllResources(loser);
+            loser.setState(OrderState.PENDIENTE);
+
+            // Interrumpir el hilo del perdedor que estaba esperando en sem.acquire()
+            if (loserThread != null) {
+                loserThread.interrupt();
+            }
+
+            // Actualizar estado del ganador para continuar su adquisición
+            winner.setState(OrderState.ESPERANDO_RECURSOS);
+        }
+
+        // Reencolar el pedido expulsado en la lista de espera del planificador
+        if (rollbackHandler != null) {
+            rollbackHandler.accept(loser);
+        }
+    }
+
+    /**
+     * Obtiene el interbloqueo activo actualmente si existe uno sin resolver.
+     *
+     * @return Evento de interbloqueo activo, o null si el sistema opera sin
+     * bloqueo circular.
+     */
+    public DeadlockEvent getActiveDeadlock() {
+        return activeDeadlock;
     }
 
     /**
@@ -362,6 +424,24 @@ public class ResourceManager {
         }
 
         return states;
+    }
+
+    /**
+     * Calcula el porcentaje de ocupación global promedio de todos los recursos
+     * del centro.
+     *
+     * @return Porcentaje entre 0.0 y 100.0.
+     */
+    public synchronized double getOverallResourceUtilization() {
+        int totalCap = 0;
+        int totalInUse = 0;
+        for (ResourceType type : ResourceType.values()) {
+            int cap = type.getTotalCapacity();
+            int avail = semaphores.get(type).availablePermits();
+            totalCap += cap;
+            totalInUse += (cap - avail);
+        }
+        return totalCap == 0 ? 0.0 : ((double) totalInUse / totalCap) * 100.0;
     }
 
     /**

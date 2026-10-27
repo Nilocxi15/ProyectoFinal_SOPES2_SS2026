@@ -159,8 +159,7 @@ public class OrderTrafficGenerator implements Runnable {
 
     /**
      * Genera un pedido individual aleatorio con productos y cantidades válidas
-     * del catálogo. Este método también puede invocarse directamente desde un
-     * botón de la interfaz gráfica para agregar pedidos de prueba bajo demanda.
+     * del catálogo.
      *
      * @return Pedido construido y listo para ser admitido por el planificador.
      */

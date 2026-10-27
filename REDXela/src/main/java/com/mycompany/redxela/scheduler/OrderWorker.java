@@ -18,10 +18,10 @@ import java.util.logging.Logger;
  *
  * Modela la EJECUCIÓN DEL PROCESO EN LA CPU:
  *
- * 1. Transición de Listo (Ready) a En Ejecución (Running).
+ * 1. Transición de Listo (Ready) a Esperando Recursos / En Ejecución (Running).
  *
  * 2. Adquisición secuencial de recursos compartidos (Semáforos) según el tipo
- * de mercancía.
+ * de mercancía, recreando la condición de Retención y Espera (Hold and Wait).
  *
  * 3. Simulación de la Ráfaga de CPU (Burst Time) proporcional a la cantidad
  * total de artículos.
@@ -40,6 +40,12 @@ public class OrderWorker implements Runnable {
      * pedido.
      */
     public static final int MS_PER_UNIT = 400;
+
+    /**
+     * Lapso de transición entre la solicitud de un recurso y el siguiente (Hold
+     * and Wait).
+     */
+    public static final int RESOURCE_STEP_DELAY_MS = 250;
 
     private final Order order;
     private final ResourceManager resourceManager;
@@ -66,23 +72,31 @@ public class OrderWorker implements Runnable {
             List<ResourceType> acquisitionOrder = order.getMerchandiseType().getResourceAcquisitionOrder();
             Map<ResourceType, Integer> requiredResources = order.getMerchandiseType().getRequiredResources();
 
-            for (ResourceType resource : acquisitionOrder) {
+            for (int i = 0; i < acquisitionOrder.size(); i++) {
+                ResourceType resource = acquisitionOrder.get(i);
                 int count = requiredResources.getOrDefault(resource, 1);
                 boolean acquired = resourceManager.acquireResource(order, resource, count);
                 if (!acquired) {
-                    LOGGER.log(Level.WARNING, "[WORKER] Pedido #{0} no pudo adquirir [{1}] (posible expulsión por Deadlock)",
+                    LOGGER.log(Level.WARNING, "[WORKER] Pedido #{0} no pudo adquirir [{1}] (expulsado por Rollback de Deadlock)",
                             new Object[]{order.getId().toString().substring(0, 8), resource.getDisplayName()});
                     return;
+                }
+
+                // Breve pausa de coordinación entre recursos para evidenciar Retención y Espera (Hold & Wait)
+                if (i < acquisitionOrder.size() - 1) {
+                    Thread.sleep(RESOURCE_STEP_DELAY_MS);
                 }
             }
 
             // Fase 2: Transición a EN_PROCESO
+            int totalDurationMs = Math.max(1000, order.getTotalUnits() * MS_PER_UNIT);
             order.setState(OrderState.EN_PROCESO);
             order.setStartProcessingTime(LocalDateTime.now());
+            order.setProgressPercentage(0);
+            order.setEstimatedRemainingSeconds(totalDurationMs / 1000);
             notifyStarted();
 
             // Fase 3: Simulación del Burst Time de trabajo
-            int totalDurationMs = Math.max(1000, order.getTotalUnits() * MS_PER_UNIT);
             int intervalMs = 200;
             int elapsedMs = 0;
 
@@ -92,10 +106,12 @@ public class OrderWorker implements Runnable {
 
                 int percentage = Math.min(100, (elapsedMs * 100) / totalDurationMs);
                 int remainingSeconds = Math.max(0, (totalDurationMs - elapsedMs) / 1000);
+                order.setProgressPercentage(percentage);
+                order.setEstimatedRemainingSeconds(remainingSeconds);
                 notifyProgress(percentage, remainingSeconds);
             }
 
-            // Fase 4: Despacho finalizado y desasignación del almacén
+            // Fase 4: Despacho finalizado y desasignación de bloques del almacén físico
             for (Map.Entry<Product, Integer> item : order.getItems().entrySet()) {
                 warehouse.deallocateUnits(item.getKey(), item.getValue());
             }
@@ -104,6 +120,8 @@ public class OrderWorker implements Runnable {
             resourceManager.releaseAllResources(order);
 
             // Fase 6: Finalización y registro de métricas
+            order.setProgressPercentage(100);
+            order.setEstimatedRemainingSeconds(0);
             order.setState(OrderState.COMPLETADO);
             order.setCompletionTime(LocalDateTime.now());
             metrics.recordOrderCompletion(order);

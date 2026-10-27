@@ -85,6 +85,16 @@ public class Order {
     private LocalDateTime completionTime;
 
     /**
+     * Porcentaje de avance del procesamiento actual (0 a 100%).
+     */
+    private volatile int progressPercentage;
+
+    /**
+     * Tiempo restante estimado de procesamiento en segundos.
+     */
+    private volatile int estimatedRemainingSeconds;
+
+    /**
      * Construye un nuevo pedido en estado inicial PENDIENTE con su marca de
      * tiempo de llegada.
      *
@@ -102,6 +112,8 @@ public class Order {
         this.totalUnits = 0;
         this.state = OrderState.PENDIENTE;
         this.arrivalTime = LocalDateTime.now();
+        this.progressPercentage = 0;
+        this.estimatedRemainingSeconds = 0;
     }
 
     /**
@@ -189,6 +201,20 @@ public class Order {
         return completionTime;
     }
 
+    /**
+     * @return Porcentaje de avance del pedido (0 a 100).
+     */
+    public int getProgressPercentage() {
+        return progressPercentage;
+    }
+
+    /**
+     * @return Segundos estimados restantes de atención.
+     */
+    public int getEstimatedRemainingSeconds() {
+        return estimatedRemainingSeconds;
+    }
+
     // Setters
     /**
      * @param state Nuevo estado del ciclo de vida.
@@ -220,6 +246,20 @@ public class Order {
      */
     public void setCompletionTime(LocalDateTime completionTime) {
         this.completionTime = completionTime;
+    }
+
+    /**
+     * @param progressPercentage Nuevo porcentaje de progreso (0 a 100).
+     */
+    public void setProgressPercentage(int progressPercentage) {
+        this.progressPercentage = progressPercentage;
+    }
+
+    /**
+     * @param estimatedRemainingSeconds Nuevos segundos restantes estimados.
+     */
+    public void setEstimatedRemainingSeconds(int estimatedRemainingSeconds) {
+        this.estimatedRemainingSeconds = estimatedRemainingSeconds;
     }
 
     @Override
